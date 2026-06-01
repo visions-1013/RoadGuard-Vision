@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+
+# Local data and model artifacts
+data/
+datasets/
+weights/
+runs/
+outputs/
+exports/
+*.pt
+*.onnx
+
+# Generated reports
+reports/*.csv
+reports/*.png
+
