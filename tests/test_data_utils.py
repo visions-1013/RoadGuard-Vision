@@ -96,6 +96,29 @@ class DataUtilsTests(unittest.TestCase):
             self.assertEqual(summary["converted_samples"], 0)
             self.assertEqual(summary["issues"], [])
 
+    def test_convert_dataset_accepts_official_rdd2022_train_layout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image = root / "source" / "Japan" / "train" / "images" / "road.png"
+            xml = (
+                root
+                / "source"
+                / "Japan"
+                / "train"
+                / "annotations"
+                / "xmls"
+                / "road.xml"
+            )
+            image.parent.mkdir(parents=True)
+            xml.parent.mkdir(parents=True)
+            image.write_bytes(VALID_PNG)
+            xml.write_text(VALID_XML, encoding="utf-8")
+
+            summary = convert_dataset(root / "source", root / "output")
+
+            self.assertEqual(summary["converted_samples"], 1)
+            self.assertTrue((root / "output" / "labels" / "Japan" / "road.txt").is_file())
+
     def test_split_subset_is_reproducible_and_uses_expected_ratios(self):
         samples = [f"sample-{index:02d}" for index in range(20)]
         first = split_subset(samples, seed=42)

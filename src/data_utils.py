@@ -24,6 +24,19 @@ class IssueRecord:
     reason: str
 
 
+def resolve_subset_directories(subset_dir: str | Path) -> tuple[Path, Path]:
+    """Return image and annotation directories for normalized or official RDD2022 data."""
+    subset = Path(subset_dir)
+    layouts = (
+        (subset / "images", subset / "annotations"),
+        (subset / "train" / "images", subset / "train" / "annotations" / "xmls"),
+    )
+    for images_dir, annotations_dir in layouts:
+        if images_dir.is_dir() and annotations_dir.is_dir():
+            return images_dir, annotations_dir
+    return layouts[0]
+
+
 def is_image_decodable(image_path: str | Path) -> bool:
     """Return whether an image can be decoded, using Pillow when available."""
     path = Path(image_path)
@@ -150,8 +163,7 @@ def convert_dataset(
         path for path in source.iterdir() if path.is_dir() and path.name in allowed_subsets
     ):
         subset = subset_dir.name
-        images_dir = subset_dir / "images"
-        annotations_dir = subset_dir / "annotations"
+        images_dir, annotations_dir = resolve_subset_directories(subset_dir)
         if not images_dir.exists():
             continue
         image_paths = sorted(

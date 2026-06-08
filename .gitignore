@@ -7,16 +7,19 @@ __pycache__/
 venv/
 
 # Local data and model artifacts
+/RDD2022/
+/models/
+/.superpowers/
 data/
 datasets/
 weights/
 runs/
 outputs/
 exports/
+*.zip
 *.pt
 *.onnx
 
 # Generated reports
 reports/*.csv
 reports/*.png
-

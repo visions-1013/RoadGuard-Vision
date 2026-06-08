@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from time import perf_counter
 
 from .constants import CLASS_ID_TO_CODE
 from .priority import score_defect, summarize_risk
+
+CHINESE_FONT_CANDIDATES = (
+    "C:/Windows/Fonts/msyh.ttc",
+    "C:/Windows/Fonts/simhei.ttf",
+    "C:/Windows/Fonts/simsun.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+)
+ASCII_PRIORITY_LEVELS = {"低": "low", "中": "medium", "高": "high"}
 
 
 def _to_list(value):
@@ -48,21 +58,75 @@ def _image_shape(image) -> tuple[int, int]:
     raise ValueError("无法读取图片尺寸")
 
 
+def _annotation_label(defect: dict, include_chinese: bool) -> str:
+    level = defect["priority_level"]
+    if include_chinese:
+        return (
+            f"{defect['class_code']} {defect['class_name']} "
+            f"{defect['confidence']:.2f} {level}"
+        )
+    return (
+        f"{defect['class_code']} {defect['confidence']:.2f} "
+        f"{ASCII_PRIORITY_LEVELS.get(level, level)}"
+    )
+
+
+def _load_chinese_font(size: int = 18):
+    try:
+        from PIL import ImageFont
+    except ImportError:
+        return None
+    for font_path in CHINESE_FONT_CANDIDATES:
+        path = Path(font_path)
+        if path.is_file():
+            try:
+                return ImageFont.truetype(str(path), size)
+            except OSError:
+                continue
+    return None
+
+
+def _draw_pillow_annotations(image, detections, font):
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        return None
+    try:
+        annotated = Image.fromarray(image) if hasattr(image, "shape") else image.copy()
+        draw = ImageDraw.Draw(annotated)
+    except Exception:
+        return None
+    include_chinese = font is not None
+    text_font = font or ImageFont.load_default()
+    for defect in detections:
+        x1, y1, x2, y2 = (int(value) for value in defect["box"])
+        draw.rectangle((x1, y1, x2, y2), outline=(255, 0, 0), width=2)
+        draw.text(
+            (x1, max(0, y1 - 22)),
+            _annotation_label(defect, include_chinese),
+            fill=(255, 0, 0),
+            font=text_font,
+        )
+    return annotated
+
+
 def draw_annotations(image, detections):
-    """Draw Chinese labels when OpenCV-compatible image data is available."""
+    """Draw Chinese labels when a suitable font exists, otherwise use ASCII."""
     annotated = image.copy() if hasattr(image, "copy") else image
+    pillow_annotated = _draw_pillow_annotations(
+        annotated, detections, _load_chinese_font()
+    )
+    if pillow_annotated is not None:
+        return pillow_annotated
     try:
         import cv2
     except ImportError:
         return annotated
-    if not hasattr(annotated, "shape"):
+    if not hasattr(annotated, "shape") or annotated.__class__.__module__ != "numpy":
         return annotated
     for defect in detections:
         x1, y1, x2, y2 = (int(value) for value in defect["box"])
-        label = (
-            f"{defect['class_code']} {defect['class_name']} "
-            f"{defect['confidence']:.2f} {defect['priority_level']}"
-        )
+        label = _annotation_label(defect, include_chinese=False)
         cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 0, 255), 2)
         cv2.putText(
             annotated,
@@ -95,4 +159,3 @@ def analyze_image(image, model, conf_threshold) -> dict:
         "inference_ms": elapsed_ms,
         "message": message,
     }
-

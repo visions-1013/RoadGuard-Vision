@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import os
+from functools import lru_cache
 from pathlib import Path
 
+from .cloud_training import MODEL_NAMES
 from .constants import CLASS_CODE_TO_NAME
 from .image_inference import analyze_image
 from .video_patrol import analyze_video
@@ -16,6 +19,7 @@ DETAIL_COLUMNS = [
     "priority_score",
     "priority_level",
 ]
+DETAIL_HEADERS = ["类别代码", "缺陷类别", "置信度", "框面积占比", "评分", "优先级"]
 VIDEO_COLUMNS = [
     "track_id",
     "class_code",
@@ -26,6 +30,29 @@ VIDEO_COLUMNS = [
     "priority_level",
     "best_frame_index",
 ]
+VIDEO_HEADERS = [
+    "轨迹 ID",
+    "类别代码",
+    "缺陷类别",
+    "置信度",
+    "框面积占比",
+    "评分",
+    "优先级",
+    "最佳帧索引",
+]
+COMPARISON_HEADERS = [
+    "模型",
+    "状态",
+    "实际加载路径",
+    "Precision",
+    "Recall",
+    "mAP50",
+    "mAP50-95",
+    "权重大小（MB）",
+    "单图耗时（ms）",
+    "推荐模型",
+]
+ULTRALYTICS_CONFIG_DIR = Path(__file__).resolve().parents[1] / "outputs" / "ultralytics"
 
 
 class ModelRegistryError(ValueError):
@@ -45,16 +72,24 @@ def validate_model_registry(model_registry: dict) -> dict:
     return resolved
 
 
-def load_project_model(model_registry: dict, model_name: str):
-    """Load a validated local weight without any pretrained-weight fallback."""
-    registry = validate_model_registry(model_registry)
-    if model_name not in registry:
-        raise ModelRegistryError(f"未注册模型：{model_name}")
+@lru_cache(maxsize=None)
+def _load_yolo_weight(weights: str):
+    """Load one local project weight once per GUI process."""
+    os.environ.setdefault("YOLO_CONFIG_DIR", str(ULTRALYTICS_CONFIG_DIR))
+    ULTRALYTICS_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     try:
         from ultralytics import YOLO
     except ImportError as error:
         raise ModelRegistryError("缺少 ultralytics 依赖，无法加载模型") from error
-    return YOLO(registry[model_name]["weights"])
+    return YOLO(weights)
+
+
+def load_project_model(model_registry: dict, model_name: str):
+    """Load a validated local weight without any pretrained-weight fallback."""
+    registry = validate_model_registry(model_registry)
+    if model_name not in registry:
+        raise ModelRegistryError("当前没有可用训练权重，请先将模型放入 models/ 目录")
+    return _load_yolo_weight(registry[model_name]["weights"])
 
 
 def _details_rows(records: list[dict], columns: list[str]) -> list[list]:
@@ -74,11 +109,17 @@ def _risk_markdown(result: dict) -> str:
 
 def _comparison_rows(model_registry: dict) -> list[list]:
     rows = []
-    for name, config in model_registry.items():
+    for name in MODEL_NAMES:
+        config = model_registry.get(name)
+        if config is None:
+            rows.append([name, "未训练", "", None, None, None, None, None, None, ""])
+            continue
         metrics = config.get("metrics", {})
         rows.append(
             [
                 name,
+                config.get("status", "未评估"),
+                config.get("weights", ""),
                 metrics.get("precision"),
                 metrics.get("recall"),
                 metrics.get("map50"),
@@ -89,6 +130,15 @@ def _comparison_rows(model_registry: dict) -> list[list]:
             ]
         )
     return rows
+
+
+def _registry_notice(model_registry: dict) -> str:
+    if not model_registry:
+        return (
+            "**模型状态：** 当前没有可用训练权重。请将本项目训练得到的模型放入 "
+            "`models/` 目录，例如 `models/n11_best.pt`。"
+        )
+    return "**模型状态：** 已自动加载 " + "、".join(model_registry)
 
 
 def _comparison_plot(model_registry: dict):
@@ -144,21 +194,25 @@ def build_demo(model_registry) -> "object":
 
     def run_video(video_path, model_name, conf_threshold):
         if not video_path:
-            return None, None, [], "**错误：** 请先上传视频"
+            return None, None, None, [], "**错误：** 请先上传视频"
         try:
             model = load_project_model(registry, model_name)
             result = analyze_video(video_path, model, conf_threshold, "exports")
             return (
+                result["annotated_video"],
                 result["annotated_video"],
                 result["csv_path"],
                 _details_rows(result["details"], VIDEO_COLUMNS),
                 _risk_markdown(result),
             )
         except Exception as error:
-            return None, None, [], f"**视频巡检失败：** {error}"
+            return None, None, None, [], f"**视频巡检失败：** {error}"
 
-    with gr.Blocks(title="RoadGuard-Vision 道路缺陷检测系统") as demo:
+    with gr.Blocks(
+        title="RoadGuard-Vision 道路缺陷检测系统",
+    ) as demo:
         gr.Markdown("# 基于 YOLO 的道路缺陷检测与维修优先级辅助评估系统")
+        gr.Markdown(_registry_notice(registry), elem_classes=["roadguard-note"])
         if registry_error:
             gr.Markdown(registry_error)
         with gr.Tab("图片检测"):
@@ -169,7 +223,7 @@ def build_demo(model_registry) -> "object":
             image_conf = gr.Slider(0.05, 0.95, value=0.25, step=0.05, label="置信度阈值")
             image_button = gr.Button("开始检测", variant="primary")
             image_summary = gr.Markdown()
-            image_table = gr.Dataframe(headers=DETAIL_COLUMNS, label="缺陷明细")
+            image_table = gr.Dataframe(headers=DETAIL_HEADERS, label="缺陷明细")
             image_button.click(
                 run_image,
                 [image_input, image_model, image_conf],
@@ -182,28 +236,26 @@ def build_demo(model_registry) -> "object":
             video_conf = gr.Slider(0.05, 0.95, value=0.25, step=0.05, label="置信度阈值")
             video_button = gr.Button("开始巡检", variant="primary")
             video_summary = gr.Markdown()
-            video_table = gr.Dataframe(headers=VIDEO_COLUMNS, label="ByteTrack 近似去重汇总")
+            video_preview = gr.Video(label="标注视频预览")
+            video_table = gr.Dataframe(headers=VIDEO_HEADERS, label="ByteTrack 近似去重汇总")
             annotated_download = gr.File(label="下载标注视频")
             csv_download = gr.File(label="下载 CSV 明细")
             video_button.click(
                 run_video,
                 [video_input, video_model, video_conf],
-                [annotated_download, csv_download, video_table, video_summary],
+                [
+                    video_preview,
+                    annotated_download,
+                    csv_download,
+                    video_table,
+                    video_summary,
+                ],
             )
 
         with gr.Tab("模型对比"):
             gr.Dataframe(
                 value=_comparison_rows(registry),
-                headers=[
-                    "模型",
-                    "Precision",
-                    "Recall",
-                    "mAP50",
-                    "mAP50-95",
-                    "权重大小（MB）",
-                    "单图耗时（ms）",
-                    "推荐模型",
-                ],
+                headers=COMPARISON_HEADERS,
                 label="真实训练权重评估指标",
             )
             gr.Plot(value=_comparison_plot(registry), label="精度与速度对比图")
@@ -232,4 +284,3 @@ def build_demo(model_registry) -> "object":
 """
             )
     return demo
-

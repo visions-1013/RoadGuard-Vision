@@ -1,6 +1,6 @@
 import unittest
 
-from src.image_inference import analyze_image
+from src.image_inference import _annotation_label, analyze_image
 
 
 class FakeTensor:
@@ -57,7 +57,18 @@ class ImageInferenceTests(unittest.TestCase):
         self.assertEqual(result["details"][0]["confidence"], 0.99)
         self.assertEqual(result["details"][0]["priority_score"], 35)
 
+    def test_annotation_label_falls_back_to_ascii_class_code(self):
+        defect = {
+            "class_code": "D00",
+            "class_name": "纵向裂缝",
+            "confidence": 0.91,
+            "priority_level": "中",
+        }
+
+        label = _annotation_label(defect, include_chinese=False)
+
+        self.assertEqual(label, "D00 0.91 medium")
+
 
 if __name__ == "__main__":
     unittest.main()
-

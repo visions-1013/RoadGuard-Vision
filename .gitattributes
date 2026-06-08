@@ -1,0 +1,13 @@
+* text=auto eol=lf
+
+*.pt binary
+*.onnx binary
+*.zip binary
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.bmp binary
+*.webp binary
+*.mp4 binary
+*.avi binary
+*.mov binary

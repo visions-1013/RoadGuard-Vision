@@ -36,6 +36,20 @@ def summarize_unique_tracks(detections: list[dict]) -> list[dict]:
     return [records[track_id] for track_id in sorted(records)]
 
 
+def score_unique_tracks(tracks: list[dict], image_shape) -> list[dict]:
+    """Score representative tracks using only neighbors from the same frame."""
+    details = []
+    for track in tracks:
+        frame_index = track["best_frame_index"]
+        nearby_tracks = [
+            candidate
+            for candidate in tracks
+            if candidate["best_frame_index"] == frame_index
+        ]
+        details.append(score_defect(track, image_shape, nearby_tracks))
+    return details
+
+
 def _to_list(value):
     return value.cpu().tolist() if hasattr(value, "cpu") else list(value)
 
@@ -80,11 +94,22 @@ def export_video_csv(records: list[dict], output_dir: str | Path) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     csv_path = directory / f"patrol_details_{timestamp}.csv"
-    with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(records)
+    try:
+        with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(records)
+    except OSError:
+        csv_path.unlink(missing_ok=True)
+        raise
     return csv_path
+
+
+def _remove_incomplete_file(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def _empty_result(message: str) -> dict:
@@ -129,6 +154,7 @@ def analyze_video(video_path, model, conf_threshold, output_dir) -> dict:
         (width, height),
     )
     if not writer.isOpened():
+        _remove_incomplete_file(annotated_path)
         return _empty_result("无法创建标注视频文件")
 
     frame_detections = []
@@ -147,14 +173,16 @@ def analyze_video(video_path, model, conf_threshold, output_dir) -> dict:
             writer.write(plotted)
     except Exception as error:
         writer.release()
+        _remove_incomplete_file(annotated_path)
         return _empty_result(f"视频分析失败：{error}")
     writer.release()
 
     unique = summarize_unique_tracks(frame_detections)
-    details = [score_defect(item, (height, width), unique) for item in unique]
+    details = score_unique_tracks(unique, (height, width))
     try:
         csv_path = export_video_csv(details, output)
     except OSError as error:
+        _remove_incomplete_file(annotated_path)
         return _empty_result(f"CSV 导出失败：{error}")
     message = (
         "未发现缺陷，整体风险为低"
@@ -168,4 +196,3 @@ def analyze_video(video_path, model, conf_threshold, output_dir) -> dict:
         "risk_summary": summarize_risk(details),
         "message": message,
     }
-
